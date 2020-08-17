@@ -35,9 +35,9 @@
 }
 \urlstyle{same}
 
-\title{State Management Standard X (draft 1)}
+\title{State Management Standard X (draft 2)}
 \author{Keith Scroggs}
-\date{15 August 2020}
+\date{17 August 2020}
 
 \begin{document}
 
@@ -75,7 +75,9 @@ Language specific types that meet this definition include JavaScript's \emph{Obj
 
 \textbf{ID} refers to a unique \emph{string} that is used to identify a resource.
 
-\textbf{Resource} refers to a data structure that can be accessed by a unique identifier (ID). \textbf{Store} refers to a map containing similar resources keyed by ID. A state is composed of as many stores as needed, which are composed of many resources. \textbf{State} refers to the relevant data needed to ensure correct and accurate operation of any program, composed of one or more stores.
+\textbf{Resource} refers to a data structure that can be accessed by a unique identifier (ID). \textbf{Store} refers to a map containing similar resources keyed by ID. A store used to manage a singular resource or piece of state (i.e user authentication/identity) is only managed by the section on single resource stores. The rest of this standard does not apply.
+
+A state is composed of as many stores as needed, which are composed of many resources. \textbf{State} refers to the relevant data needed to ensure correct and accurate operation of any program, composed of one or more stores.
 
 \textbf{Parent data source} refers to any source of data that a store MUST be able to both read and write to. Examples of this include localstorage, IndexedDB, CRUD capable APIs, and JSON/CSV files. If a parent data source contains encrypted data, it SHOULD provide clients with checksums of the encrypted data, so that the client may avoid wasteful decryption operations if the data has not changed from a cached version.
 
@@ -124,6 +126,11 @@ true: {
 '123': []
 \end{lstlisting}
 
+\subsection{Single Resource Stores}
+Not all stores are used to manage multiple resources by ID. Sometimes, a store is necessary simply to manage a single resource or piece of state, this is referred to as a \textbf{single resource store}. A common example of this is that a store may be used to tell components of a program if a user is authenticated. \textbf{\textit{The only requirement of a store of this nature is that the data component is a map.}} No other guidelines or requirements outlined in this standard need to be followed for a single resource store. Greater freedom is granted to the programmer for single resource stores, as their functionality and design can vary greatly by their function in a program.
+
+\subsection{Store Structure}
+
 Henceforth, a store will be referred to as three components: data, methods, and reactivity. A store's data refers to the underlying state that the store is used to access and subscribe to. A store's methods refer to callable code that is used to modify a store's data. A store's reactivity refer to any internal components of a store that are used to notify subscribers when a method changes data.
 
 \begin{lstlisting}[caption={Data, Reactivity, and Methods}]
@@ -160,7 +167,7 @@ A store MAY contain reactivity, a mostly invisible component dedicated to allowi
 \subsection{Method Behavior}
 Any method of a store, whether the method is required by this standard or custom, must adhere to and not conflict with the behavior defined in this section. A method MUST NOT be assumed to succeed. A method MUST either throw or return any relevant errors.
 
-In languages that support async/await syntax, any method of a store that accesses async functionality (calls any function that is declared as async or returns a promise) MUST be declared as async. This is to ensure that any rejected promises are properly passed upstream so that they may be handled.
+In languages that support async/await syntax, any method of a store that accesses async functionality (calls any function that is declared as async or returns a promise) MUST be declared as async. This is to ensure that any rejected promises are properly passed upstream so that they may be handled. Any event driven API accessed within a method MUST be either wrapped as a promise and awaited, or have an event listener placed on the error event to throw an error, therefore rejecting the method itself. If the event provides an error, the method MUST NOT intercept or alter this error in any way.
 
 If a method accepts an ID as a parameter, the method MUST verify if the ID actually refers to a resource belonging to the same store as the method being called before performing any interactions/operations. A method MUST throw/return an error of an ID is passed that does not match a resource belonging to the store from which the method is being called. If no ID is passed, the method MUST throw an error. 
 
@@ -403,9 +410,94 @@ export const derivedResources = createDerived()
 export default create()
 \end{lstlisting}
 
-% TODO
 \section{Caching of Encrypted Resources}
-This section is to be written in the next draft of this document.
+This section contains guidelines for the handling of zero-access encryption in compliance with this standard.
+
+\subsection{Overview}
+Decrypting information on the client-side requires a nontrivial amount of resources and time, and SHOULD be minimized as much as possible. In order to accomplish this, checksums SHOULD be used in a specific way to ensure that store methods avoid decrypting information that it already has a copy of.
+
+\subsection{Calculating Checksums}
+Checksums MUST be taken from resources on the server-side, before being sent to the client. This is both an additional effort towards minimizing client resource usage, and a preventative measure against errors/inconsistencies in client code for taking checksums. Checksums MUST be taken of the encrypted form of a resource, NOT the decrypted form, as this would undermine the entire point of avoiding unnecessary decryption operations. The checksum MUST be taken from a BINARY, CONCATENATED form of the resource being retrieved. If the resource is stored in binary and then converted to another format before being sent to the user (such as hex or base64), all properties MUST be concatenated while still in binary form. The concatenation order of these properties does not matter, as long as it is consistent between each time a checksum for the resource is calculated. Each time the checksum is calculated for a resource, it MUST be identical, unless the resource itself has changed.
+
+\subsection{Checksum Algorithms}
+The hash used to calculate checksums DOES NOT need to be cryptographically secure, as it is only ever taken of data that is already encrypted, so if the hash function were reversed, this would be harmless. While security is not an important function of this hash, speed is. Older, faster hashes such as MD5 and SHA-1 are preferred to newer hashes that provide greater security at the cost of speed.
+
+\subsection{Cached Storage}
+When storing a nontrivial amount of data, it is important that clients have a fast, indexed method of storage and retrieval. On the web, this standard encourages the usage of IndexedDB, NOT localstorage for storing cached resources and checksums.
+
+\subsection{Applying Checksums during Initialization}
+A client SHOULD perform logic to avoid unnecessary decryption during a store's \verb|init| method as follows:
+\begin{enumerate}
+    \item The resource is retrieved from a parent data source, the retrieved data includes a checksum for the resource's encrypted form.
+    \item The client tries to retrieve a cached copy of the resource from its cache.
+    \item If retrieving a cached copy of the resource fails, the client decrypts the resource, and stores it along with its checksum in the cache.
+    \item If a cached copy is retrieved, the client compares the checksum of the cached copy with the checksum retrieved from the parent data source.
+    \item If the two checksums match, the client knows that the resource has not changed, and does not decrypt the information.
+    \item If the two checksums do not match, the client knows that the resource has updated, decrypts the information, updates its cache to contain the updated data and checksum.
+    \item Finally, now that the cache has been synchronized with the parent data source, each resource in the cache is added to the store.
+\end{enumerate}
+This logic DOES NOT alter or otherwise take precedent over the required methods for updating application state specified in section 4, it simply provides a design pattern to greatly speed up the \verb|init| method when dealing with encrypted data.
+
+\begin{lstlisting}[caption=Retrieving Encrypted Resources]
+async init() {
+    const res = await fetch('https://api.example.com/resources', {
+        method: 'GET'
+    })
+    const body = await res.json()
+    
+    // In real code, this should be wrapped as a promise
+    const req = someIDBstore.getAll()
+    
+    req.addEventListever('error', () => {
+        throw req.error // This may be wrapped in an Error constructor if a linter/formatter demands so
+    })
+    req.addEventListener('success', () => {
+        const cache = req.result // Produces an array of all cached resources
+        
+        // First, clear any resources that don't exist anymore
+        for (const resource of cache) {
+            if (!body.find(r => r.id === resource.id)) {
+                someIDBstore.delete(resource.id)
+            }
+        }
+        
+        // Apply the logic explained above to avoid unnecessary decryption
+        for (const resource of body) {
+            // If there is a cached copy of the resource
+            const cached = cache.find(r => r.id === resource.id)
+            if (cached) {
+                // And the checksum matches the one returned from the API call
+                if (cached.checksum === resource.meta.checksum) {
+                    // Skip decryption and continue onto the next resource
+                    continue
+                }
+            }
+            
+            // At this point, we can decrypt knowing that it isn't a wasteful operation
+            const decrypted = await someDecyptFunction(resource, someKey)
+            
+            // Add decrypted + checksum to cache using a PUT method to overwrite any data that was already there under the ID
+            // (this code is omitted here because it's very resource-specific)
+        }
+        
+        // Now we know that our cache is up to date, so we retrieve all results again and add each resource to the store
+        const newReq = someIDBstore.getAll()
+        
+        newReq.addEventListever('error', () => {
+                throw newReq.error
+        })
+        newReq.addEventListener('success', () => {
+            const resources = newReq.result
+            
+            for (const resource of resources) {
+                update((store) => {
+                    store[resource.id] = resource
+                })
+            }
+        }
+    })
+}
+\end{lstlisting}
 
 \newpage
 \section{Application of this Document}
